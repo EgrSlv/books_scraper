@@ -164,9 +164,10 @@ def get_book_data(book_url: str) -> Dict[str, Any]:
 
     if soup:
         p_main = soup.find('div', class_='col-sm-6 product_main')
-        info_table = soup.find('table').find_all('tr')
+        info_table = soup.find('table')
         desc = soup.find('div', id='product_description')
 
+    if soup and p_main and info_table and desc:
         book_data = {
             'title': p_main.find('h1').text.strip(),
             'price': (re_price
@@ -185,16 +186,21 @@ def get_book_data(book_url: str) -> Dict[str, Any]:
                                     .text
                                     .strip()) if desc else '',
             'product information': {
-                'UPC': info_table[0].td.text,
-                'product Type': info_table[1].td.text,
+                'UPC': info_table.find_all('tr')[0].td.text,
+                'product Type': info_table.find_all('tr')[1].td.text,
                 'price (excl. tax)': (
-                    re_price.search(info_table[2].td.text).group()),
+                    re_price.search(info_table.find_all('tr')[2].td.text)
+                    .group()),
                 'price (incl. tax)': (
-                    re_price.search(info_table[3].td.text).group()),
-                'tax': re_price.search(info_table[4].td.text).group(),
-                'availability': (
-                    re_availability.search(info_table[5].td.text).group(1)),
-                'number of reviews': info_table[6].td.text
+                    re_price.search(info_table.find_all('tr')[3].td.text)
+                    .group()),
+                'tax': (re_price
+                        .search(info_table.find_all('tr')[4].td.text)
+                        .group()),
+                'availability': (re_availability
+                                 .search(info_table.find_all('tr')[5].td.text)
+                                 .group(1)),
+                'number of reviews': info_table.find_all('tr')[6].td.text
             }
         }
 
