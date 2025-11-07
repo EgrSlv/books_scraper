@@ -1,10 +1,10 @@
 # Books Scraper
 
-    A simple web scraper for extracting book data from websites.
+A simple web scraper for extracting book data from websites.
 
 ## Description
 
-    This project contains a Python script for collecting book information from various online sources. The script extracts data such as title, author, price, rating, and other useful information.
+This project contains a Python script for collecting book information from various online sources. The script extracts data such as title, author, price, rating, and other useful information.
 
 ## Installation
 
@@ -21,18 +21,19 @@
 
 ## Usage
 Run the main script:
+
     ```bash
     python scraper.py
     ```
 
 ## Features
-    - Book data parsing from websites
-    - Save results in CSV/JSON format
-    - Configurable scraping parameters
+- Book data parsing from websites
+- Save results in CSV/JSON format
+- Configurable scraping parameters
 
 ## Requirements
-    - Python 3.6+
-    - Dependencies listed in `requirements.txt`
+- Python 3.13
+- Dependencies listed in `requirements.txt`
 
 ## License
-    - MIT
+- MIT
