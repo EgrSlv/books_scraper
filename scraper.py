@@ -1,12 +1,37 @@
 #!/usr/bin/env python3
 """
-This module provides functions to scrape book data from
-the Books.toscrape website.
-It includes functionality to extract book links, parse book details,
-and save results.
+Web Scraping Module for Books.toscrape.com
+
+This module provides a comprehensive solution for scraping book data from
+the Books.toscrape website. It includes functionality to:
+- Extract book links from catalog pages with pagination support
+- Parse detailed book information from individual product pages
+- Process data concurrently for improved performance
+- Schedule automated scraping tasks
+- Save results to JSON format
+
+The module handles various edge cases including URL normalization,
+error handling, and progress tracking.
+
+Key Features:
+    - Concurrent scraping with ThreadPoolExecutor
+    - Progress visualization with tqdm
+    - Flexible scheduling with schedule library
+    - Robust error handling for network requests
+    - Configurable batch processing
+
+Example:
+    >>> from books_scraper import scrape_books
+    >>> books_data = scrape_books(
+    ...     base_url='https://books.toscrape.com/',
+    ...     is_save=True
+    ... )
+    >>> print(f"Scraped {len(books_data)} books")
 """
 
 import re
+import select
+import sys
 import json
 import time
 from itertools import islice
@@ -18,42 +43,51 @@ from tqdm import tqdm
 from bs4 import BeautifulSoup
 
 
-def get_soup(base_url: str) -> Optional[BeautifulSoup]:
+def get_soup(session: requests.Session,
+             base_url: str) -> Optional[BeautifulSoup]:
     """
     Fetch HTML content from a URL and parse it into a BeautifulSoup
     object.
 
     Args:
+        session (requests.Session): The requests session to use for the
+                                    HTTP request.
         base_url (str): The URL to fetch HTML content from.
 
     Returns:
         Optional[BeautifulSoup]:
             - BeautifulSoup object if request is successful
-            - None if an error occurs
+            - None if an error occurs during HTML parsing
 
     Raises:
-        requests.RequestException:
-            If there's an issue with the HTTP request
-            (handled internally, returns None instead of raising).
+        requests.RequestException: If there's an issue with the HTTP
+                                   request (connection error, timeout,
+                                   HTTP error, etc.)
+
+    Note:
+        HTTP-related exceptions are propagated to the caller for
+        handling.
+        Returns None only for HTML parsing issues, not for HTTP errors.
 
     Example:
-        >>> soup = get_soup("https://example.com")
-        >>> if soup:
-        ...     title = soup.find('title')
-        ...     print(title.text)
+        >>> import requests
+        >>> session = requests.Session()
+        >>> try:
+        ...     soup = get_soup(session, "https://example.com")
+        ...     if soup:
+        ...         title = soup.find('title')
+        ...         print(title.text)
+        ... except requests.RequestException as e:
+        ...     print(f"Request failed: {e}")
+        >>> session.close()
     """
-    try:
-        with requests.get(base_url, timeout=20) as r:
-            r.raise_for_status()
-            soup = BeautifulSoup(r.content, 'lxml')
-    except requests.RequestException as e:
-        print(f"Error fetching {base_url}:", e)
-        soup = None
-
-    return soup
+    response = session.get(base_url, timeout=20)
+    response.raise_for_status()
+    return BeautifulSoup(response.content, 'lxml')
 
 
 def get_books_links(
+        session: requests.Session,
         base_url: str,
         _raw_url: Optional[str] = None) -> Generator[str, None, None]:
     """
@@ -64,6 +98,8 @@ def get_books_links(
     'catalogue/' to relative URLs when necessary.
 
     Args:
+        session (requests.Session): The requests session to use for HTTP
+                                    requests
         base_url (str): Base catalog URL to start parsing from
         _raw_url (Optional[str]): Raw URL for edge case testing.
                                   If not provided, uses base_url + '/'
@@ -72,33 +108,43 @@ def get_books_links(
         str: Full URLs of book links
 
     Note:
-        _raw_url is needed for edge case testing. See usage example.
+        _raw_url is needed for edge case testing when starting from
+        specific pages. See usage example.
 
     Examples:
-        >>> for book_link in get_books_links(
-                "http://books.toscrape.com"):
-        ...     print(book_link)
+        Basic usage:
+            >>> with requests.Session() as session:
+            ...     for book_link in get_books_links(
+                        session, "http://books.toscrape.com"
+                    ):
+            ...         print(book_link)
 
-        >>> b_url = 'https://books.toscrape.com/catalogue/page-31.html'
-        >>> r_url = 'https://books.toscrape.com/'
-        >>> res = get_books_links(base_url=b_url, _raw_url=r_url)
-        >>> print(list(res))
-        ... # displaying content 'res' starting from page 31
+        Edge case - starting from specific page:
+            >>> b_url = ('https://books.toscrape.com/'
+                         +'catalogue/page-31.html')
+            >>> r_url = 'https://books.toscrape.com/'
+            >>> with requests.Session() as session:
+            ...     res = list(get_books_links(session,
+                                               base_url=b_url,
+                                               _raw_url=r_url))
+            ...     print(f"Found {len(res)} books start with page 31")
     """
-    in_catalogue: Callable[[str], str] = (
-        lambda link: '' if 'catalogue' in link else 'catalogue/')
+    in_catalogue: Callable[[str], str] = lambda link: (
+        '' if 'catalogue' in link else 'catalogue/'
+    )
 
     if not _raw_url:
-        _raw_url = base_url + '/'
+        _raw_url = base_url.rstrip('/') + '/'
 
     while base_url:
-        soup = get_soup(base_url)
+        soup = get_soup(session, base_url)
         if not soup:
             break
 
         for link in soup.find_all('a', title=True):
             href = link.get('href', '')
-            yield _raw_url + in_catalogue(href) + href
+            if href:
+                yield _raw_url + in_catalogue(href) + href
 
         next_page = soup.find('li', class_='next')
         if next_page and next_page.a:
@@ -108,7 +154,7 @@ def get_books_links(
             base_url = None
 
 
-def get_book_data(book_url: str) -> Dict[str, Any]:
+def get_book_data(session: requests.Session, book_url: str) -> Dict[str, Any]:
     """
     Extracts detailed information about a book from its product page.
 
@@ -118,6 +164,8 @@ def get_book_data(book_url: str) -> Dict[str, Any]:
     tax details, etc.
 
     Args:
+        session (requests.Session): The requests session to use for HTTP
+                                    requests
         book_url (str): The URL of the book's product page to scrape.
 
     Returns:
@@ -134,20 +182,28 @@ def get_book_data(book_url: str) -> Dict[str, Any]:
                     'price (incl. tax)'; 'tax'; 'availability';
                     'number of reviews'
 
-    Raises:
-        Exceptions related to HTML parsing originate from BeautifulSoup
-        operations.
-
     Note:
         Returns an empty dictionary if the page cannot be loaded or
-        parsed. Converts star rating classes ('One', 'Two', etc.)
-        to numeric values.
+        parsed.
+        Converts star rating classes ('One', 'Two', etc.) to numeric
+        values.
+        Some fields may be missing or empty if the corresponding HTML
+        elements are not found.
+        The 'product description' field may be an empty string.
+
+    Raises:
+        No exceptions are raised externally; all errors are handled
+        internally by returning an empty dictionary. Internal parsing
+        errors may occur if the HTML structure differs from expected.
 
     Example:
+        >>> session = requests.Session()
         >>> book_data = get_book_data(
-                "http://books.toscrape.com/catalogue/"
-                + "a-light-in-the-attic_1000/index.html"
-            )
+        ...     session,
+        ...     "http://books.toscrape.com/catalogue/"
+        ...     + "a-light-in-the-attic_1000/index.html"
+        ... )
+        >>> session.close()
         >>> print(book_data['title'])
         'A Light in the Attic'
         >>> print(book_data['price'])
@@ -160,27 +216,30 @@ def get_book_data(book_url: str) -> Dict[str, Any]:
                                'Five': 5}
     re_price: re.Pattern = re.compile(r'£\d+\.\d{2}')
     re_availability: re.Pattern = re.compile(r'\((.*?)\)')
-    soup: Optional[BeautifulSoup] = get_soup(book_url)
+    soup: Optional[BeautifulSoup] = get_soup(session, book_url)
 
+    p_main: BeautifulSoup
+    info_table: BeautifulSoup
+    desc: BeautifulSoup
     if soup:
         p_main = soup.find('div', class_='col-sm-6 product_main')
         info_table = soup.find('table')
         desc = soup.find('div', id='product_description')
 
-    if soup and p_main and info_table and desc:
+    if soup and p_main and info_table:
         book_data = {
             'title': p_main.find('h1').text.strip(),
             'price': (re_price
-                        .search(p_main
-                                .find('p', class_='price_color')
-                                .text)
-                        .group()),
+                      .search(p_main
+                              .find('p', class_='price_color')
+                              .text)
+                      .group()),
             'in stock': re_availability.search(p_main.text).group(1),
             'rating': (
                 ratings.get(
                     p_main.find('p', class_='star-rating')['class'][-1],
                     None)
-                ),
+            ),
             'product description': (desc
                                     .find_next_sibling('p')
                                     .text
@@ -230,20 +289,15 @@ def scrape_books(
                         'books_data.txt' (default: False).
 
     Returns:
-        Dict[str, Any]: A dictionary where keys are book URLs and
-                        values are dictionaries containing detailed book
-                        information.
-
-    Raises:
-        Exceptions related to HTML parsing originate from BeautifulSoup
-        operations.
+        Dict[str, Any]: A dictionary where keys are book URLs
+                        and values are dictionaries containing
+                        detailed book information.
+                        Returns empty dict if no books found.
 
     Note:
-        Uses ThreadPoolExecutor for concurrent scraping with up
-        to 100 workers.
+        Uses ThreadPoolExecutor for concurrent scraping.
         Includes progress visualization with tqdm.
-        Only saves data if both is_save=True and initial page parsing
-        succeeds.
+        Saves data only if is_save=True and books data is available.
 
     Example:
         >>> # Basic usage
@@ -256,32 +310,54 @@ def scrape_books(
         ...     is_save=True
         ... )
         >>> # Data will be saved to 'books_data.txt'
+
+        >>> # Edge case - starting from specific page:
+        >>> books = scrape_books(
+        ...     base_url=('https://books.toscrape.com'
+        ...              + '/catalogue/page-31.html'),
+        ...     _raw_url='https://books.toscrape.com/',
+        ...     is_save=True
+        ... )
+        >>> # Data will be saved to 'books_data.txt'
     """
-
     books: Dict[str, Any] = {}
-    links: Generator[str, None, None] = get_books_links(base_url, _raw_url)
-    soup: Optional[BeautifulSoup] = get_soup(base_url)
 
-    if soup:
-        strong_tags = soup.find_all('strong')
-        total = int(strong_tags[0].text) - int(strong_tags[1].text) + 1
+    try:
+        with requests.Session() as session:
+            links = get_books_links(session, base_url, _raw_url)
+            soup = get_soup(session, base_url)
 
-        with tqdm(total=total, desc='Scrape books', ncols=100) as pbar:
-            while True:
-                batch = list(islice(links, batch_size))
-                if not batch:
-                    break
+            if soup:
+                strong_tags = soup.find_all('strong')
+                total = int(strong_tags[0].text) - int(strong_tags[1].text) + 1
 
-                with ThreadPoolExecutor(max_workers=70) as executor:
-                    results = executor.map(get_book_data, batch)
-                    books.update(zip(batch, results))
-                pbar.update(len(batch))
+                with tqdm(total=total, desc='Scrape books', ncols=100) as pbar:
+                    with ThreadPoolExecutor(max_workers=70) as executor:
+                        while True:
+                            batch = list(islice(links, batch_size))
+                            if not batch:
+                                break
 
-    if is_save and soup:
-        file_name = './artifacts/books_data.txt'
-        with open(file_name, 'w', encoding='utf-8') as f:
-            json.dump(books, f, ensure_ascii=False, indent=4)
-        print(f"The data has been saved to file '{file_name}'!")
+                            books.update(
+                                zip(batch, executor.map(
+                                    lambda url: get_book_data(session, url),
+                                    batch))
+                            )
+                            pbar.update(len(batch))
+
+    except requests.RequestException as e:
+        print(f"Error during scraping {base_url}: {e}")
+
+    finally:
+        if is_save:
+            if books:
+
+                file_name = './artifacts/books_data.txt'
+                with open(file_name, 'w', encoding='utf-8') as f:
+                    json.dump(books, f, ensure_ascii=False, indent=4)
+                print(f"The data has been saved to file '{file_name}'!")
+            else:
+                print("No data to save - books dictionary is empty")
 
     return books
 
@@ -290,9 +366,17 @@ if __name__ == '__main__':
     schedule.every().day.at("19:00:00", 'Europe/Moscow').do(
         scrape_books, base_url='https://books.toscrape.com/', is_save=True)
 
-    while True:
-        schedule.run_pending()
-        if time.localtime().tm_min <= 5:
-            time.sleep(3000)
-        else:
+    try:
+        print('Task Scheduler has started.')
+        print('To stop, type S/s and press Enter.')
+
+        while True:
+            schedule.run_pending()
+            if select.select([sys.stdin], [], [], 0.1)[0]:
+                if sys.stdin.readline().strip().lower() in ['S', 's']:
+                    print("Stopping scheduler...")
+                    break
             time.sleep(1)
+
+    except KeyboardInterrupt:
+        print('\nThe scraping process has terminated!')
