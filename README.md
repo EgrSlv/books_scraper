@@ -21,7 +21,6 @@ This project contains a Python script for collecting book information from vario
 
 ## Usage
 Run the main script:
-
     ```bash
     python scraper.py
     ```
