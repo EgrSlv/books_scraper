@@ -270,7 +270,8 @@ def scrape_books(
         base_url: str = '',
         _raw_url: Optional[str] = None,
         batch_size: int = 200,
-        is_save: bool = False) -> Dict[str, Any]:
+        is_save: bool = False,
+        file_name: str = './artifacts/books_data.txt') -> Dict[str, Any]:
     """
     Scrapes book data from an online catalog using parallel processing.
 
@@ -285,8 +286,11 @@ def scrape_books(
                                   handling of URL formatting.
         batch_size (int): Number of books to process in each batch
                           (default: 200).
-        is_save (bool): If True, saves the scraped data to
-                        'books_data.txt' (default: False).
+        is_save (bool): If True, saves the scraped data to a file
+                        (default: False).
+        file_name (str): Path where to save the resulting file when
+                         is_save is True
+                         (default: './artifacts/books_data.txt').
 
     Returns:
         Dict[str, Any]: A dictionary where keys are book URLs
@@ -351,8 +355,6 @@ def scrape_books(
     finally:
         if is_save:
             if books:
-
-                file_name = './artifacts/books_data.txt'
                 with open(file_name, 'w', encoding='utf-8') as f:
                     json.dump(books, f, ensure_ascii=False, indent=4)
                 print(f"The data has been saved to file '{file_name}'!")
